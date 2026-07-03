@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pro Announcer</title>
+    <style>
+        :root { --primary: #4f46e5; --bg: #f8fafc; }
+        body { font-family: system-ui, sans-serif; background: var(--bg); padding: 20px; min-height: 100vh; display: flex; flex-direction: column; }
+        .card { max-width: 450px; margin: auto; background: white; padding: 20px; border-radius: 16px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; }
+        .hidden { display: none; }
+        textarea { width: 100%; height: 120px; padding: 12px; border: 2px solid #e2e8f0; border-radius: 12px; box-sizing: border-box; margin-bottom: 10px; font-size: 16px; }
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
+        .lang-item { background: #f1f5f9; padding: 8px; border-radius: 8px; font-size: 13px; display: flex; align-items: center; gap: 5px; }
+        button { width: 100%; padding: 15px; border-radius: 12px; border: none; background: var(--primary); color: white; cursor: pointer; margin-top: 10px; font-weight: bold; }
+        .btn-recording { background: #ef4444; }
+        .btn-stop { background: #64748b; }
+        footer { text-align: center; font-size: 12px; color: #64748b; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div id="setupPage" class="card">
+    <h2 style="text-align: center;">ANNOUNCEMENT SETUP</h2>
+    <textarea id="textInput" placeholder="Type or use voice to input any language..."></textarea>
+    
+    <button id="voiceBtn" class="btn-recording" onclick="toggleDictation()">🎤 Start Recording</button>
+    
+    <div class="controls">
+        <label><input type="radio" name="gender" value="male" checked> Male</label>
+        <label><input type="radio" name="gender" value="female"> Female</label>
+        <label><input type="checkbox" id="musicCheck" checked> Alert Music</label>
+    </div>
+
+    <div id="langContainer" style="display:grid; grid-template-columns: 1fr 1fr; gap: 10px;"></div>
+    
+    <div style="margin-top: 15px;">
+        <select id="langSelect" style="width: 100%; padding: 10px; border-radius: 8px;">
+            <option value="fr-FR">French</option>
+            <option value="es-ES">Spanish</option>
+            <option value="de-DE">German</option>
+            <option value="it-IT">Italian</option>
+            <option value="fil-PH">Filipino</option>
+        </select>
+        <button onclick="addLanguage()" style="background: #3b82f6;">+ Add Language</button>
+    </div>
+
+    <button onclick="startAnnouncement()">START ANNOUNCEMENT</button>
+</div>
+
+<div id="playerPage" class="card hidden">
+    <h2 style="text-align: center;">ANNOUNCEMENT ACTIVE</h2>
+    <p id="statusText" style="text-align: center; font-weight: bold;">Preparing...</p>
+    <button style="background: #10b981;" onclick="runAnnouncementSequence()">Repeat Announcement</button>
+    <button style="background: #ef4444;" onclick="stopAll()">Stop & Exit</button>
+</div>
+
+<footer>Developed by Muhsin</footer>
+
+<script>
+    const synth = window.speechSynthesis;
+    let isRecording = false;
+
+    // Predefined languages + Add function
+    let langs = [
+        {n:"English", c:"en-US"}, {n:"Malayalam", c:"ml-IN"},{n:"Filipino", c:"fil-PH"},
+        {n:"Hindi", c:"hi-IN"}, {n:"Bengali", c:"bn-IN"}, {n:"Arabic", c:"ar-SA"}
+    ];
+
+    function renderLangs() {
+        const container = document.getElementById('langContainer');
+        container.innerHTML = '';
+        langs.forEach(l => {
+            container.innerHTML += `<label class="lang-item"><input type="checkbox" value="${l.c}" checked> ${l.n}</label>`;
+        });
+    }
+
+    function addLanguage() {
+        const select = document.getElementById('langSelect');
+        const code = select.value;
+        const name = select.options[select.selectedIndex].text;
+        if (!langs.find(l => l.c === code)) {
+            langs.push({n: name, c: code});
+            renderLangs();
+        }
+    }
+
+    renderLangs();
+
+    // Voice Input
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition;
+    if (SpeechRecognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.onresult = (e) => {
+            document.getElementById('textInput').value = Array.from(e.results).map(r => r[0].transcript).join('');
+        };
+    }
+
+    function toggleDictation() {
+        if (!recognition) return alert("Browser does not support voice input.");
+        if (isRecording) { recognition.stop(); isRecording = false; document.getElementById('voiceBtn').innerText = "🎤 Start Recording"; } 
+        else { recognition.start(); isRecording = true; document.getElementById('voiceBtn').innerText = "⏹ Stop Recording"; }
+    }
+
+    async function translateText(text, targetLang) {
+        const langCode = targetLang.split('-')[0];
+        if (langCode === 'en') return text;
+        try {
+            const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${langCode}&dt=t&q=${encodeURI(text)}`);
+            const data = await res.json();
+            return data[0].map(x => x[0]).join('');
+        } catch (e) { return text; }
+    }
+
+    async function playAudio(file) {
+        return new Promise((resolve) => {
+            const audio = new Audio(file);
+            audio.onended = resolve;
+            audio.play().catch(resolve); // Proceed even if blocked
+        });
+    }
+
+    async function startAnnouncement() {
+        if (!document.getElementById('textInput').value) return alert("Enter text.");
+        document.getElementById('setupPage').classList.add('hidden');
+        document.getElementById('playerPage').classList.remove('hidden');
+        await runAnnouncementSequence();
+    }
+
+    async function runAnnouncementSequence() {
+        const text = document.getElementById('textInput').value;
+        const checked = Array.from(document.querySelectorAll('#langContainer input:checked')).map(i => i.value);
+        
+        synth.cancel();
+        if (document.getElementById('musicCheck').checked) await playAudio("alert starting.mp3");
+
+        for (let langCode of checked) {
+            document.getElementById('statusText').innerText = "Speaking: " + langCode;
+            const translated = await translateText(text, langCode);
+            await new Promise(resolve => {
+                const u = new SpeechSynthesisUtterance(translated);
+                u.lang = langCode;
+                u.onend = resolve;
+                synth.speak(u);
+            });
+        }
+        
+        if (document.getElementById('musicCheck').checked) await playAudio("alert stopping.mp3");
+        document.getElementById('statusText').innerText = "Finished";
+    }
+
+    function stopAll() {
+        synth.cancel();
+        document.getElementById('setupPage').classList.remove('hidden');
+        document.getElementById('playerPage').classList.add('hidden');
+    }
+</script>
+</body>
+</html>
